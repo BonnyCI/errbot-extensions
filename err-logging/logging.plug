@@ -1,0 +1,9 @@
+[Core]
+Name = Logging
+Module = logging
+
+[Documentation]
+Description = This is a simple plugin that logs the channels it is in
+
+[Python]
+Version = 2+
