@@ -1,0 +1,9 @@
+[Core]
+Name = Standup
+Module = standup
+
+[Documentation]
+Description = This is a plugin to manage asynchronous standups
+
+[Python]
+Version = 2+
