@@ -6,7 +6,7 @@ import pytz
 
 from errbot import BotPlugin, botcmd
 
-STANDUP_HOUR = 14
+STANDUP_HOUR = 10
 
 class Standup(BotPlugin):
     """ Standup class for errbot """
@@ -22,15 +22,15 @@ class Standup(BotPlugin):
                 {'timezone': 'America/New_York',
                  'users': ['olaph'], },
                 {'timezone': 'America/Chicago',
-                 'users': ['eventingmonkey', 'eggshell'], },
+                 'users': ['eventingmonkey',
+                           'eggshell'], },
                 {'timezone': 'America/Los_Angeles',
                  'users': ['adam_g',
                            'auggy',
                            'jlk',
                            'rattboi',
                            'SpamapS',
-                           'jesusaur'], }]
-        }
+                           'jesusaur'], }]}
 
         self.initialize_scheduler()
         db_ok = self.initialize_database()
@@ -77,7 +77,7 @@ class Standup(BotPlugin):
 
     def notify_users(self, users):
         for user in users:
-            self.send(self.build_identifier('#bonnyci-errbot'),
+            self.send(self.build_identifier(user),
                       "Hey {}, it's time for your standup!".format(user))
 
     @staticmethod
@@ -87,18 +87,46 @@ class Standup(BotPlugin):
     # Bot commands section
 
     @botcmd
+    def standup(self, msg, args):
+        return self.standup_help(msg, args)
+
+    @botcmd
+    def standup_help(self, msg, args):
+        """Gives the user info on how to use the standup plugin
+           usage: !standup help"""
+        lines = ["!standup add <status> -- Add a status to today's standup (can be done multiple times)",
+                 "!standup get          -- Get all of today's statuses for your user (to review or delete)",
+                 "!standup delete <id>  -- Delete a status from today's standup"]
+        return '\n'.join(lines)
+
+    @botcmd
     def standup_add(self, msg, args):
         """Adds a new status
            usage: !standup add <status>"""
         if args == '':
             return "Usage: !standup add <status>"
-        self.db_insert_status(self.con, msg.frm.nick, args)
-        return "added: {}".format(args)
+        user = msg.frm.nick
+        timezone = self.lookup_timezone_from_user(user, self.userdata['timezones'])
+        if timezone is None:
+            self.log.debug("Couldn't find timezone for user: {}".format(user))
+        else:
+            local_now = self.utc_to_timezone(datetime.utcnow(), timezone)
+            local_date = local_now.date()
+            self.db_insert_status(self.con, user, args, local_date)
+            return "added: {}".format(args)
 
     @staticmethod
-    def db_insert_status(db_conn, author, status):
+    def lookup_timezone_from_user(user, timezones):
+        results = [group['timezone'] for group in timezones if user in group['users']]
+        if len(results) == 1:
+            return results[0]
+        else:
+            return None
+
+    @staticmethod
+    def db_insert_status(db_conn, author, status, date):
         with db_conn as c:
-            c.execute("""INSERT INTO statuses (status, author) VALUES (?,?)""", (status, author))
+            c.execute("""INSERT INTO statuses (status, author, date) VALUES (?,?,?)""", (status, author, date))
 
     @botcmd
     def standup_get(self, msg, args):
