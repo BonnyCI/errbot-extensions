@@ -91,7 +91,7 @@ class Standup(BotPlugin):
                 except:
                     self.notified[user] = False
 
-    def clear_notified(users):
+    def clear_notified(self, users):
         for user in users:
             self.notified[user] = False
 
