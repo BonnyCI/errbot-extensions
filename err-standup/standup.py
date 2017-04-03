@@ -32,6 +32,7 @@ class Standup(BotPlugin):
                            'SpamapS',
                            'jesusaur'], }]}
 
+        self.staged = {}
         self.initialize_scheduler()
         db_ok = self.initialize_database()
         if db_ok:
@@ -47,7 +48,9 @@ class Standup(BotPlugin):
                 con.execute("""create table if not exists statuses
                                 (id integer primary key,
                                  date text default CURRENT_DATE,
-                                 status text not null,
+                                 yesterday text not null,
+                                 today text not null,
+                                 blockers text not null,
                                  author text default 'unknown');""")
         except sqlite3.Error as e:
             self.log.error(e)
@@ -64,7 +67,7 @@ class Standup(BotPlugin):
         for timezone in timezones:
             local_now = self.utc_to_timezone(now, timezone)
             if local_now.hour == STANDUP_HOUR and local_now.weekday() < 6:  # M-F
-                users = self.get_local_users(timezone, timezones)
+                users = self.get_local_users(timezone, self.userdata['timezones'])
                 self.notify_users(users)
 
     @staticmethod
@@ -94,26 +97,84 @@ class Standup(BotPlugin):
     def standup_help(self, msg, args):
         """Gives the user info on how to use the standup plugin
            usage: !standup help"""
-        lines = ["!standup add <status> -- Add a status to today's standup (can be done multiple times)",
-                 "!standup get          -- Get all of today's statuses for your user (to review or delete)",
-                 "!standup delete <id>  -- Delete a status from today's standup"]
+        lines = ["!standup start                             -- Start today's standup",
+                 "!standup yesterday/today/blockers <status> -- Add to today's standup",
+                 "!standup review                            -- Review today's uncommitted standup",
+                 "!standup commit                            -- Commit today's standup",
+                 "!standup log                               -- Show today's committed standup for your user (to review or delete)",
+                 "!standup delete <id>                       -- Delete today's standup"]
         return '\n'.join(lines)
 
     @botcmd
-    def standup_add(self, msg, args):
-        """Adds a new status
-           usage: !standup add <status>"""
-        if args == '':
-            return "Usage: !standup add <status>"
+    def standup_start(self, msg, args):
         user = msg.frm.nick
-        timezone = self.lookup_timezone_from_user(user, self.userdata['timezones'])
+        self.clear_stage(user)
+        return "Please use '!standup yesterday/today/blockers' to stage your standup, and '!standup commit' when you're done"
+
+    def clear_stage(self, user):
+        self.staged[user] = {}
+
+    @botcmd
+    def standup_yesterday(self, msg, args):
+        return self.standup_set_part(msg.frm.nick, 'yesterday', args)
+
+    @botcmd
+    def standup_today(self, msg, args):
+        return self.standup_set_part(msg.frm.nick, 'today', args)
+
+    @botcmd
+    def standup_blockers(self, msg, args):
+        return self.standup_set_part(msg.frm.nick, 'blockers', args)
+
+    def standup_set_part(self, user, part, status):
+        staged = self.get_staging(user)
+        self.log.debug(staged)
+        if staged is not None:
+            staged[part] = status
+            self.log.debug("was staged")
+            return
+        else:
+            self.log.debug("not staged")
+            return "you need to '!standup start' first"
+
+    def get_staging(self, user):
+        return self.staged.get(user, None)
+
+    @botcmd
+    def standup_review(self, msg, args):
+        user = msg.frm.nick
+        staged = self.staged.get(user, {})
+        for part in ['yesterday', 'today', 'blockers']:
+            yield "{}: {}".format(part, staged.get(part, '<unset>'))
+
+    def get_local_date_for_user(self, user, timezones):
+        timezone = self.lookup_timezone_from_user(user, timezones)
         if timezone is None:
             self.log.debug("Couldn't find timezone for user: {}".format(user))
+            return None
         else:
             local_now = self.utc_to_timezone(datetime.utcnow(), timezone)
-            local_date = local_now.date()
-            self.db_insert_status(self.con, user, args, local_date)
-            return "added: {}".format(args)
+            return local_now.date()
+
+    @botcmd
+    def standup_commit(self, msg, args):
+        """Adds a new status
+           usage: !standup commit"""
+        user = msg.frm.nick
+        staged = self.staged.get(user, None)
+        if staged == None:
+            return "you need to '!standup start' first"
+        for part in ['yesterday', 'today', 'blockers']:
+            if part not in staged:
+                return "{}: not all field filled. Use '!standup review' to determine which fields are missing".format(part)
+        local_date = self.get_local_date_for_user(user, self.userdata["timezones"])
+        existing_statuses = self.db_get_status_from_author_and_date(self.con, user, local_date)
+        if len(existing_statuses) > 0:
+            return "Oops, previous standup already committed for today. Please use '!standup delete' to remove prior standup"
+        else:
+            self.db_insert_status(self.con, user, staged, local_date)
+            self.clear_stage(user)
+            return "Standup committed. Use '!standup log' to see committed standup, or '!standup delete' to redo today's standup"
 
     @staticmethod
     def lookup_timezone_from_user(user, timezones):
@@ -125,25 +186,35 @@ class Standup(BotPlugin):
 
     @staticmethod
     def db_insert_status(db_conn, author, status, date):
+        yesterday = status['yesterday']
+        today = status['today']
+        blockers = status['blockers']
         with db_conn as c:
-            c.execute("""INSERT INTO statuses (status, author, date) VALUES (?,?,?)""", (status, author, date))
+            c.execute("""INSERT INTO statuses (yesterday, today, blockers, author, date) VALUES (?,?,?,?,?)""", (yesterday, today, blockers, author, date))
 
     @botcmd
-    def standup_get(self, msg, args):
-        """Gets all statuses for a specific user for today
-           usage: !standup get"""
-        author = msg.frm.nick
-        date = datetime.utcnow().date() if args == '' else args
-        yield "Statuses for {} on {}".format(author, date)
-        statuses = self.db_get_status_from_author_and_date(self.con, author, date)
+    def standup_log(self, msg, args):
+        """Shows statuses for a specific user for today
+           usage: !standup log"""
+        user = msg.frm.nick
+        local_date = self.get_local_date_for_user(user, self.userdata["timezones"])
+        date = local_date if args == '' else args
+        yield "Statuses for {} on {}".format(user, date)
+        statuses = self.db_get_status_from_author_and_date(self.con, user, date)
         for status in statuses:
-            yield "{}: {}".format(status['id'], status['status'])
+            yield "{}:".format(status['id'])
+            yield "- yesterday: {}".format(status['yesterday'])
+            yield "- today:     {}".format(status['today'])
+            yield "- blockers:  {}".format(status['blockers'])
 
     @staticmethod
     def db_get_status_from_author_and_date(db_conn, author, date):
         cur = db_conn.cursor()
-        cur.execute("""SELECT id, status FROM statuses WHERE author=? AND date=?""", (author, date))
-        results = [{'id': row[0], 'status': row[1]} for row in cur]
+        cur.execute("""SELECT id, yesterday, today, blockers FROM statuses WHERE author=? AND date=?""", (author, date))
+        results = [{'id': row[0],
+                    'yesterday': row[1],
+                    'today': row[2],
+                    'blockers': row[3]} for row in cur]
         return results
 
     @botcmd
@@ -157,9 +228,9 @@ class Standup(BotPlugin):
             status_id = int(args)
         except:
             return "Invalid id: {}".format(args)
-        author = msg.frm.nick
-        today = datetime.utcnow().date()
-        count = self.db_delete_status_by_id(self.con, status_id, author, today)
+        user = msg.frm.nick
+        local_date = self.get_local_date_for_user(user, self.userdata["timezones"])
+        count = self.db_delete_status_by_id(self.con, status_id, user, local_date)
         if count > 0:
             return "deleted: id {}".format(status_id)
         else:
