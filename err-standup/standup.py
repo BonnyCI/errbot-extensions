@@ -33,6 +33,7 @@ class Standup(BotPlugin):
                            'jesusaur'], }]}
 
         self.staged = {}
+        self.notified = {}
         self.initialize_scheduler()
         db_ok = self.initialize_database()
         if db_ok:
@@ -66,9 +67,11 @@ class Standup(BotPlugin):
         now = datetime.utcnow()
         for timezone in timezones:
             local_now = self.utc_to_timezone(now, timezone)
+            users = self.get_local_users(timezone, self.userdata['timezones'])
             if local_now.hour == STANDUP_HOUR and local_now.weekday() < 6:  # M-F
-                users = self.get_local_users(timezone, self.userdata['timezones'])
                 self.notify_users(users)
+            else:
+                self.clear_notified(users)
 
     @staticmethod
     def get_local_users(timezone, timezones):
@@ -80,8 +83,17 @@ class Standup(BotPlugin):
 
     def notify_users(self, users):
         for user in users:
-            self.send(self.build_identifier(user),
-                      "Hey {}, it's time for your standup!".format(user))
+            if self.notified.get(user, False) == False:
+                try:
+                    self.send(self.build_identifier(user),
+                              "Hey {}, it's time for your standup! Use '!standup start' to begin".format(user))
+                    self.notified[user] = True
+                except:
+                    self.notified[user] = False
+
+    def clear_notified(users):
+        for user in users:
+            self.notified[user] = False
 
     @staticmethod
     def utc_to_timezone(some_date, tz):
