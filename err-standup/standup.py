@@ -114,7 +114,7 @@ class Standup(BotPlugin):
                  "!standup review                            -- Review today's uncommitted standup",
                  "!standup commit                            -- Commit today's standup",
                  "!standup log                               -- Show today's committed standup for your user (to review or delete)",
-                 "!standup delete <id>                       -- Delete today's standup"]
+                 "!standup delete <id>                       -- Delete today's standup",
                  "!standup team <date>                       -- Show team's standup for date (default = today)"]
         return '\n'.join(lines)
 
