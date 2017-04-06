@@ -115,6 +115,7 @@ class Standup(BotPlugin):
                  "!standup commit                            -- Commit today's standup",
                  "!standup log                               -- Show today's committed standup for your user (to review or delete)",
                  "!standup delete <id>                       -- Delete today's standup"]
+                 "!standup team <date>                       -- Show team's standup for date (default = today)"]
         return '\n'.join(lines)
 
     @botcmd
@@ -254,3 +255,28 @@ class Standup(BotPlugin):
         cur.execute("""DELETE FROM statuses WHERE id=? AND author=? AND date=?""", (status_id, author, date))
         db_conn.commit()
         return cur.rowcount
+
+    @botcmd
+    def standup_team(self, msg, args):
+        """Show standups for the entire team for a given day, defaults to today
+           usage: !standup team <date>"""
+        user = msg.frm.nick
+        local_date = self.get_local_date_for_user(user, self.userdata["timezones"])
+        date = local_date if args == '' else args
+        yield "Standups for {}".format(date)
+        statuses = self.db_get_statuses_from_date(self.con, date)
+        for status in statuses:
+            yield "{}:".format(status['author'])
+            yield "- yesterday: {}".format(status['yesterday'])
+            yield "- today:     {}".format(status['today'])
+            yield "- blockers:  {}".format(status['blockers'])
+
+    @staticmethod
+    def db_get_statuses_from_date(db_conn, date):
+        cur = db_conn.cursor()
+        cur.execute("""SELECT author, yesterday, today, blockers FROM statuses WHERE date=?""", (date, ))
+        results = [{'author': row[0],
+                    'yesterday': row[1],
+                    'today': row[2],
+                    'blockers': row[3]} for row in cur]
+        return results
