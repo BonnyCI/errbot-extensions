@@ -68,7 +68,7 @@ class Standup(BotPlugin):
         for timezone in timezones:
             local_now = self.utc_to_timezone(now, timezone)
             users = self.get_local_users(timezone, self.userdata['timezones'])
-            if local_now.hour == STANDUP_HOUR and local_now.weekday() < 6:  # M-F
+            if local_now.hour == STANDUP_HOUR and local_now.weekday() < 5:  # M-F
                 self.notify_users(users)
             else:
                 self.clear_notified(users)
