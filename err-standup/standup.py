@@ -1,12 +1,11 @@
 """ Standup plugin for errbot """
 from datetime import datetime
-import os
 import sqlite3
 import pytz
+import yaml
 
 from errbot import BotPlugin, botcmd
 
-STANDUP_HOUR = 10
 
 class Standup(BotPlugin):
     """ Standup class for errbot """
@@ -15,36 +14,25 @@ class Standup(BotPlugin):
 
     def activate(self):
         """ Initial entrypoint to plugin """
-        self.userdata = {
-            'timezones': [
-                {'timezone': 'Australia/Sydney',
-                 'users': ['jamielennox'], },
-                {'timezone': 'America/New_York',
-                 'users': ['olaph'], },
-                {'timezone': 'America/Chicago',
-                 'users': ['eventingmonkey',
-                           'eggshell'], },
-                {'timezone': 'America/Los_Angeles',
-                 'users': ['adam_g',
-                           'auggy',
-                           'jlk',
-                           'rattboi',
-                           'SpamapS',
-                           'jesusaur'], }]}
+        if hasattr(self.bot_config, 'STANDUP_CONFIG_PATH'):
+            standup_config_file = self.bot_config.STANDUP_CONFIG_PATH
+        else:
+            standup_config_file = '/etc/standup/config.yaml'
+        config_file = open(standup_config_file, 'r')
+        self.config = yaml.safe_load(config_file)
 
         self.staged = {}
         self.notified = {}
         self.initialize_scheduler()
-        db_ok = self.initialize_database()
+        db_ok = self.initialize_database(self.config.get('database_path'))
         if db_ok:
             super(Standup, self).activate()
 
-    def initialize_database(self):
+    def initialize_database(self, path_to_db_file):
         """Creates standup database if it doesn't exist"""
-        standup_db = os.path.join(self.plugin_dir, 'standup.sqlite')
         self.con = None
         try:
-            self.con = sqlite3.connect(standup_db, check_same_thread=False)
+            self.con = sqlite3.connect(path_to_db_file, check_same_thread=False)
             with self.con as con:
                 con.execute("""create table if not exists statuses
                                 (id integer primary key,
@@ -63,12 +51,15 @@ class Standup(BotPlugin):
     # Scheduler tasks
 
     def check_for_scheduled_standups(self):
-        timezones = [group['timezone'] for group in self.userdata['timezones']]
+        tz_config = self.config.get('timezones', [])
+        timezones = [group['timezone'] for group in tz_config]
+        local_notification_hour = self.config.get('local_notification_hour', 10)
+
         now = datetime.utcnow()
         for timezone in timezones:
             local_now = self.utc_to_timezone(now, timezone)
-            users = self.get_local_users(timezone, self.userdata['timezones'])
-            if local_now.hour == STANDUP_HOUR and local_now.weekday() < 5:  # M-F
+            users = self.get_local_users(timezone, tz_config)
+            if local_now.hour == local_notification_hour and local_now.weekday() < 5:  # M-F
                 self.notify_users(users)
             else:
                 self.clear_notified(users)
@@ -180,7 +171,7 @@ class Standup(BotPlugin):
         for part in ['yesterday', 'today', 'blockers']:
             if part not in staged:
                 return "{}: not all field filled. Use '!standup review' to determine which fields are missing".format(part)
-        local_date = self.get_local_date_for_user(user, self.userdata["timezones"])
+        local_date = self.get_local_date_for_user(user, self.config["timezones"])
         existing_statuses = self.db_get_status_from_author_and_date(self.con, user, local_date)
         if len(existing_statuses) > 0:
             return "Oops, previous standup already committed for today. Please use '!standup delete' to remove prior standup"
@@ -210,7 +201,7 @@ class Standup(BotPlugin):
         """Shows statuses for a specific user for today
            usage: !standup log"""
         user = msg.frm.nick
-        local_date = self.get_local_date_for_user(user, self.userdata["timezones"])
+        local_date = self.get_local_date_for_user(user, self.config["timezones"])
         date = local_date if args == '' else args
         yield "Statuses for {} on {}".format(user, date)
         statuses = self.db_get_status_from_author_and_date(self.con, user, date)
@@ -242,7 +233,7 @@ class Standup(BotPlugin):
         except:
             return "Invalid id: {}".format(args)
         user = msg.frm.nick
-        local_date = self.get_local_date_for_user(user, self.userdata["timezones"])
+        local_date = self.get_local_date_for_user(user, self.config["timezones"])
         count = self.db_delete_status_by_id(self.con, status_id, user, local_date)
         if count > 0:
             return "deleted: id {}".format(status_id)
@@ -261,7 +252,7 @@ class Standup(BotPlugin):
         """Show standups for the entire team for a given day, defaults to today
            usage: !standup team <date>"""
         user = msg.frm.nick
-        local_date = self.get_local_date_for_user(user, self.userdata["timezones"])
+        local_date = self.get_local_date_for_user(user, self.config["timezones"])
         date = local_date if args == '' else args
         yield "Standups for {}".format(date)
         statuses = self.db_get_statuses_from_date(self.con, date)
