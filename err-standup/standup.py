@@ -178,7 +178,10 @@ class Standup(BotPlugin):
         else:
             self.db_insert_status(self.con, user, staged, local_date)
             self.clear_stage(user)
-            return "Standup committed. Use '!standup log' to see committed standup, or '!standup delete' to redo today's standup"
+            lines = ["Standup committed. Use '!standup log' to see committed standup, or '!standup delete' to redo today's standup",
+                     "See everyone's committed standups at {}".format(self.config.get('web_ui_url', '(url not defined)'))]
+            return '\n'.join(lines)
+
 
     @staticmethod
     def lookup_timezone_from_user(user, timezones):
